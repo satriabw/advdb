@@ -48,8 +48,6 @@ join.full(
 |> top(n: 10, columns: ["Loss"])
 |> yield()
 
-
-
 # Number 4 Query - ORder by other than time is not supported by influx
 select SUM("TradeSize") from "advdb"."autogen"."findata" where "time" >= '2022-11-17T00:00:00Z' and "time" < '2022-11-18T00:00:00Z' group by "Id" ORDER BY time DESC
 
@@ -57,3 +55,23 @@ select SUM("TradeSize") from "advdb"."autogen"."findata" where "time" >= '2022-1
 SELECT "Id", top(transactions, 10000), sumc FROM (Select count("TradeSize") as transactions FROM "advdb"."autogen"."findata" where "SIC" =~ /COMPUTER*/ group by "Id" ) 
 
 # Number 6 Query
+lastAskPrice = from(bucket: "advdb")
+  |> range(start: 2021-11-18T00:00:00.000Z, stop: now())
+  |> filter(fn: (r) => r["_measurement"] == "findata")
+  |> filter(fn: (r) => (r["_field"] == "AskPrice" and exists r._value))
+  |> group(columns: ["Id"])
+  |> last()
+
+lastBidPrice = from(bucket: "advdb")
+  |> range(start: 2021-11-18T00:00:00.000Z, stop: now())
+  |> filter(fn: (r) => r["_measurement"] == "findata")
+  |> filter(fn: (r) => (r["_field"] == "BidPrice" and exists r._value))
+  |> group(columns: ["Id"])
+  |> last()
+
+union(tables: [lastAskPrice, lastBidPrice])
+|> pivot(rowKey: ["Id"], columnKey: ["_field"], valueColumn: "_value")
+|> map(fn: (r) => ({r with _value: ( 2.0 * ( r.AskPrice - r.BidPrice ) / ( r.AskPrice + r.BidPrice ) )}))
+|> group()
+|> top(n: 10, columns: ["_value"])
+|> yield()
