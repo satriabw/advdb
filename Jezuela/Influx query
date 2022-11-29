@@ -1,0 +1,127 @@
+# Number 1 Query
+select * from "advdb"."autogen"."findata" where "time" >= '2022-11-17T08:00:00Z' and "time" <= '2022-11-17T11:00:00Z' and "Id" =~ /Security_5%*/
+
+# Number 1 Query
+
+from(bucket: "advdb")
+  |> range(start: 2022-11-21T00:00:00.000Z, stop: 2022-11-21T03:00:00.000Z)
+  |> filter(fn: (r) => r["_measurement"] == "findata")
+  |> filter(fn: (r) => r["Id"] =~ /Security_5%*/)
+  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: true)
+  |> yield(name: "Query 1")
+
+
+
+# Number 2 Query
+SELECT SUM(Volume) / SUM(TradeSize) FROM (SELECT  "TradePrice" * "TradeSize" as Volume, TradeSize from "advdb"."autogen"."findata" where "time" >= '2022-11-17T08:00:00Z' and "time" <= '2022-11-17T11:00:00Z' and "Id" =~ /Security%*/) GROUP BY "Id"
+
+
+# Number 2 Query
+from(bucket: "advdb")
+  |> range(start: 2022-11-21T00:00:00.000Z, stop: 2022-11-21T03:00:00.000Z)
+  |> filter(fn: (r) => r["_measurement"] == "findata")
+    |> filter(fn: (r) => r._field == "TradeSize" or r.Trade == "TradePrice")
+  |> map(
+        fn: (r) => ({ 
+            r with _value: float(v: r.TradeSize * r.TradePrice) / float(v: r.TradeSize) 
+        }),
+    )
+|> yield(name: "Query 2")
+
+
+# Number 3 Query
+select tid, yid, TodayTradePrice*100/YesterdayTradePrice
+FROM (
+    SELECT "Id" as  yid, "TradePrice" as YesterdayTradePrice
+    FROM "advdb"."autogen"."findata"
+    WHERE "time" >= '2022-11-17T00:00:00Z' AND "time" < '2022-11-18T00:00:00Z'
+), (
+    SELECT "Id" as tid, "TradePrice" as TodayTradePrice
+    FROM "advdb"."autogen"."findata"
+    WHERE "time" >= '2022-11-18T00:00:00Z' AND "time" < '2022-11-19T00:00:00Z'
+) where tid = yid
+
+# Number 3 Query
+import "join"
+import "experimental"
+
+yesteday = from(bucket: "advdb")
+|> range(start: 2022-11-17T00:00:00.000Z, stop: 2022-11-17T23:59:59.999Z)
+|> filter(fn: (r) => r._measurement == "findata")
+|> filter(fn: (r) => r._field == "Id" or r._field == "TradePrice")
+|> group(columns: ["Id"])
+|> last()
+
+today = from(bucket: "advdb")
+|> range(start: 2022-11-18T00:00:00.000Z, stop: 2022-11-19T23:59:59.999Z)
+|> filter(fn: (r) => r._measurement == "findata")
+|> filter(fn: (r) => r._field == "Id" or r._field == "TradePrice")
+|> group(columns: ["Id"])
+|> last()
+
+join.full(
+    left: yesteday |> group(),
+    right: today |> group(),
+    on: (l, r) => l.Id == r.Id,
+    as: (l, r) => {
+        yesterday = if exists l._value then l._value else 0.0
+        today = if exists r._value then r._value else 0.0
+
+        return {_start: l._start, _stop: l._stop, _time: l._time, Id: l.Id, Loss: (today*100.0)/yesterday, yesteday: yesterday, today: today}
+    },
+)
+|> top(n: 10, columns: ["Loss"])
+|> yield()
+
+# Number 4 Query - ORder by other than time is not supported by influx
+select SUM("TradeSize") from "advdb"."autogen"."findata" where "time" >= '2022-11-17T00:00:00Z' and "time" < '2022-11-18T00:00:00Z' group by "Id" ORDER BY time DESC
+
+# Number 4 Query 
+
+from(bucket: "advdb")
+  |> range(start: 2022-11-21T00:00:00.000Z, stop: 2022-11-22T00:00:00.000Z)
+  |> filter(fn: (r) => r["_measurement"] == "findata")
+  |> filter(fn: (r) => r._field == "TradeSize" or r._field == "Id")
+  |> aggregateWindow(every: v.windowPeriod, fn: sum)
+  |> group(columns:  ["Id"])
+  |> yield(name: "Query 4")
+
+# Number 5 Query
+SELECT "Id", top(transactions, 10000), sumc FROM (Select count("TradeSize") as transactions FROM "advdb"."autogen"."findata" where "SIC" =~ /COMPUTER*/ group by "Id" ) 
+
+  
+import "experimental"
+from(bucket: "advdb")
+  |> range(start: 2022-11-21T00:00:00.000Z, stop: 2022-11-21T03:00:00.000Z)
+  |> filter(fn: (r) => r["_measurement"] == "findata")
+  |> filter(fn: (r) => r["SIC"] =~ /COMPUTER%*/)
+  |> aggregateWindow(every: v.windowPeriod, fn:count)
+  |> limit(n:3)
+  |> group(columns: ["ID", "_measurement"], mode:"by")
+  |> top(n:10, columns: ["_value"])
+  |> yield(name: "Query 5")
+
+  
+  
+
+# Number 6 Query
+lastAskPrice = from(bucket: "advdb")
+  |> range(start: 2021-11-18T00:00:00.000Z, stop: now())
+  |> filter(fn: (r) => r["_measurement"] == "findata")
+  |> filter(fn: (r) => (r["_field"] == "AskPrice" and exists r._value))
+  |> group(columns: ["Id"])
+  |> last()
+
+lastBidPrice = from(bucket: "advdb")
+  |> range(start: 2021-11-18T00:00:00.000Z, stop: now())
+  |> filter(fn: (r) => r["_measurement"] == "findata")
+  |> filter(fn: (r) => (r["_field"] == "BidPrice" and exists r._value))
+  |> group(columns: ["Id"])
+  |> last()
+
+union(tables: [lastAskPrice, lastBidPrice])
+|> pivot(rowKey: ["Id"], columnKey: ["_field"], valueColumn: "_value")
+|> map(fn: (r) => ({r with _value: ( 2.0 * ( r.AskPrice - r.BidPrice ) / ( r.AskPrice + r.BidPrice ) )}))
+|> group()
+|> top(n: 10, columns: ["_value"])
+|> yield()
