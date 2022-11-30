@@ -1,8 +1,96 @@
 # Number 1 Query
 select * from "advdb"."autogen"."findata" where "time" >= '2022-11-17T08:00:00Z' and "time" <= '2022-11-17T11:00:00Z' and "Id" =~ /Security_5%*/
 
+# Number 1 Query
+
+from(bucket: "advdb")
+  |> range(start: 2022-11-21T00:00:00.000Z, stop: 2022-11-21T03:00:00.000Z)
+  |> filter(fn: (r) => r["_measurement"] == "findata")
+  |> filter(fn: (r) => r["Id"] =~ /Security_5%*/)
+  |> aggregateWindow(every: 3h, fn: mean, createEmpty: true)
+  |> yield(name: "Query 1")
+
+
+
 # Number 2 Query
 SELECT SUM(Volume) / SUM(TradeSize) FROM (SELECT  "TradePrice" * "TradeSize" as Volume, TradeSize from "advdb"."autogen"."findata" where "time" >= '2022-11-17T08:00:00Z' and "time" <= '2022-11-17T11:00:00Z' and "Id" =~ /Security%*/) GROUP BY "Id"
+
+
+from(bucket: "advdb")
+  |> range(start: 2022-11-21T00:00:00.000Z, stop: 2022-11-22T00:00:00.000Z)
+  |> filter(fn: (r) => r["_measurement"] == "findata")
+    |> filter(fn: (r) => r._field == "TradeSize" or r._field == "TradePrice")
+    |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
+  
+  |> map(
+        fn: (r) => ({ 
+            r with
+            TotalSP: (r.TradeSize * r.TradePrice),
+        }),
+    )
+    |> reduce(
+    fn: (r, accumulator) => ({
+        sum1: r.TradeSize + accumulator.sum1,
+        sum2: r.TotalSP + accumulator.sum2,   
+
+    }),
+    identity: {sum1: 0.0, sum2: 0.0},)
+
+    |> map(
+        fn: (r) => ({ 
+            r with
+            Volume: r.sum2/r.sum1,
+        }),
+    )
+
+  |> group(columns: ["Id"], mode:"by")
+  |> limit(n:2)
+  |> yield()
+
+
+
+# Number 2 Query
+Part1=from(bucket: "advdb")
+  |> range(start: 2022-11-21T00:00:00.000Z, stop: 2022-11-22T00:00:00.000Z)
+  |> filter(fn: (r) => r["_measurement"] == "findata")
+    |> filter(fn: (r) => r._field == "TradeSize" or r._field == "TradePrice")
+    |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
+  |> map(
+        fn: (r) => ({ 
+            r with
+            TotalTP: (r.TradeSize * r.TradePrice)
+        }),
+    )
+  |> sum(column: "TotalTP")
+  |> group(columns: ["Id"], mode:"by")
+  |> limit(n:1)
+  |> keep(columns: ["_value", "_time", "TotalTP"])
+
+
+Part2=from(bucket: "advdb")
+  |> range(start: 2022-11-21T00:00:00.000Z, stop: 2022-11-22T00:00:00.000Z)
+  |> filter(fn: (r) => r["_measurement"] == "findata")
+    |> filter(fn: (r) => r._field == "TradeSize" or r._field == "TradePrice")
+    |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
+   |>  sum(column:"TradeSize" )
+  |> group(columns: ["Id"], mode:"by")
+  |> limit(n:1)
+  |> keep(columns: ["_value", "_time"])
+  
+
+
+union(tables: [Part1, Part2])
+
+  |> cumulativeSum(columns: ["TotalTP", "TradeSize"])
+|> map(
+        fn: (r) => ({ 
+            r with
+            _value: (r.TotalTP / r.TradeSize)
+        }),
+    )
+  |> limit(n:1)
+|> yield()
+
 
 # Number 3 Query
 select tid, yid, TodayTradePrice*100/YesterdayTradePrice
@@ -51,8 +139,33 @@ join.full(
 # Number 4 Query - ORder by other than time is not supported by influx
 select SUM("TradeSize") from "advdb"."autogen"."findata" where "time" >= '2022-11-17T00:00:00Z' and "time" < '2022-11-18T00:00:00Z' group by "Id" ORDER BY time DESC
 
+# Number 4 Query 
+
+from(bucket: "advdb")
+  |> range(start: 2022-11-21T00:00:00.000Z, stop: 2022-11-22T00:00:00.000Z)
+  |> filter(fn: (r) => r["_measurement"] == "findata")
+  |> filter(fn: (r) => r._field == "TradeSize" or r._field == "Id")
+  |> aggregateWindow(every: v.windowPeriod, fn: sum)
+  |> group(columns:  ["Id"])
+  |> yield(name: "Query 4")
+
 # Number 5 Query
 SELECT "Id", top(transactions, 10000), sumc FROM (Select count("TradeSize") as transactions FROM "advdb"."autogen"."findata" where "SIC" =~ /COMPUTER*/ group by "Id" ) 
+
+  
+import "experimental"
+from(bucket: "advdb")
+  |> range(start: 2022-11-21T00:00:00.000Z, stop: 2022-11-21T03:00:00.000Z)
+  |> filter(fn: (r) => r["_measurement"] == "findata")
+  |> filter(fn: (r) => r["SIC"] =~ /COMPUTER%*/)
+  |> aggregateWindow(every: v.windowPeriod, fn:count)
+  |> limit(n:3)
+  |> group(columns: ["ID", "_measurement"], mode:"by")
+  |> top(n:10, columns: ["_value"])
+  |> yield(name: "Query 5")
+
+  
+  
 
 # Number 6 Query
 lastAskPrice = from(bucket: "advdb")
